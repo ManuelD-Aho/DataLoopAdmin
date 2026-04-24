@@ -4,6 +4,8 @@ import {
   getAlerts,
   getDashboard,
   getDatasets,
+  getTaskDetails,
+  getTasks,
   getUsers,
   loginAdmin,
   updateConfig,
@@ -39,6 +41,12 @@ const NAV_ITEMS = [
     icon: Icons.CloudArrowUp,
   },
   {
+    id: "tasks",
+    label: "Taches",
+    detail: "Suivi des campagnes",
+    icon: Icons.List,
+  },
+  {
     id: "datasets",
     label: "Datasets",
     detail: "Exports valides",
@@ -65,6 +73,14 @@ const API_DOCS_URL = "https://dataloop-production.up.railway.app/api/documentati
 const DEFAULT_CONFIG = {
   seuil_consensus: 66,
   freq_sentinelle: 10,
+};
+
+const STATUS_LABELS = {
+  actif: "Actif",
+  suspendu: "Suspendu",
+  nouvelle: "Nouvelle",
+  en_cours: "En cours",
+  terminee: "Terminee",
 };
 
 function readSession() {
@@ -186,19 +202,6 @@ function BrandLockup({ compact = false, inverse = false }) {
         <img src={LOGO_SRC} alt="DataLoop" />
       </span>
       <span className="brand-admin-label">Admin</span>
-    </div>
-  );
-}
-
-function PageIntro({ eyebrow, title, body, action }) {
-  return (
-    <div className="page-intro">
-      <div>
-        <p className="eyebrow">{eyebrow}</p>
-        <h2>{title}</h2>
-        {body ? <p>{body}</p> : null}
-      </div>
-      {action}
     </div>
   );
 }
@@ -343,21 +346,30 @@ function LoginScreen({ notice, onLogin }) {
 
 function AdminShell({ activeView, onNavigate, onLogout, user }) {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [userSearchKey, setUserSearchKey] = useState("");
   const activeItem = NAV_ITEMS.find((item) => item.id === activeView) || NAV_ITEMS[0];
-
-  const content = {
-    dashboard: <DashboardPage onNavigate={onNavigate} />,
-    users: <UsersPage />,
-    alerts: <AlertsPage onOpenUsers={() => onNavigate("users")} />,
-    upload: <UploadPage />,
-    datasets: <DatasetsPage />,
-    config: <ConfigPage />,
-  }[activeView];
 
   function navigate(view) {
     onNavigate(view);
     setMobileNavOpen(false);
   }
+
+  const content = {
+    dashboard: <DashboardPage onNavigate={onNavigate} />,
+    users: <UsersPage initialSearch={userSearchKey} onResetSearch={() => setUserSearchKey("")} />,
+    alerts: (
+      <AlertsPage
+        onOpenUser={(telephone) => {
+          setUserSearchKey(telephone || "");
+          navigate("users");
+        }}
+      />
+    ),
+    upload: <UploadPage />,
+    tasks: <TasksPage />,
+    datasets: <DatasetsPage />,
+    config: <ConfigPage />,
+  }[activeView];
 
   return (
     <div className="admin-shell">
@@ -377,52 +389,56 @@ function AdminShell({ activeView, onNavigate, onLogout, user }) {
           </button>
         </div>
 
-        <nav className="sidebar-nav" aria-label="Navigation admin">
-          {NAV_ITEMS.map((item) => {
-            const Icon = item.icon;
-            const isActive = item.id === activeView;
+        <div className="sidebar-scroll">
+          <nav className="sidebar-nav" aria-label="Navigation admin">
+            {NAV_ITEMS.map((item) => {
+              const Icon = item.icon;
+              const isActive = item.id === activeView;
 
-            return (
-              <button
-                className={`nav-item ${isActive ? "active" : ""}`}
-                key={item.id}
-                onClick={() => navigate(item.id)}
-                type="button"
-              >
-                <Icon size={20} weight={isActive ? "duotone" : "regular"} />
-                <span>
-                  <strong>{item.label}</strong>
-                  <small>{item.detail}</small>
-                </span>
-              </button>
-            );
-          })}
-        </nav>
+              return (
+                <button
+                  className={`nav-item ${isActive ? "active" : ""}`}
+                  key={item.id}
+                  onClick={() => navigate(item.id)}
+                  type="button"
+                >
+                  <Icon size={20} weight={isActive ? "duotone" : "regular"} />
+                  <span>
+                    <strong>{item.label}</strong>
+                    <small>{item.detail}</small>
+                  </span>
+                </button>
+              );
+            })}
+          </nav>
 
-        <div className="sidebar-card">
-          <span className="mini-label">Connexion API</span>
-          <strong>{API_BASE_URL.replace("https://", "")}</strong>
-          <a href={API_DOCS_URL} rel="noreferrer" target="_blank">
-            Documentation
-            <Icons.ArrowRight size={13} weight="bold" />
-          </a>
+          <div className="sidebar-card">
+            <span className="mini-label">Connexion API</span>
+            <strong>{API_BASE_URL.replace("https://", "")}</strong>
+            <a href={API_DOCS_URL} rel="noreferrer" target="_blank">
+              Documentation
+              <Icons.ArrowRight size={13} weight="bold" />
+            </a>
+          </div>
         </div>
 
-        <div className="sidebar-user">
-          <div className="avatar">
-            <Icons.UserCircle size={28} weight="duotone" />
+        <div className="sidebar-bottom">
+          <div className="sidebar-user">
+            <div className="avatar">
+              <Icons.UserCircle size={28} weight="duotone" />
+            </div>
+            <div>
+              <strong>{user?.name || "Admin DataLoop"}</strong>
+              <small>{user?.telephone || "Compte administrateur"}</small>
+            </div>
+            <button aria-label="Deconnexion" className="icon-button" onClick={onLogout} type="button">
+              <Icons.SignOut size={18} />
+            </button>
           </div>
-          <div>
-            <strong>{user?.name || "Admin DataLoop"}</strong>
-            <small>{user?.telephone || "Compte administrateur"}</small>
+          <div className="sidebar-foot">
+            <span>DataLoop Admin</span>
+            <span>v0.1</span>
           </div>
-          <button aria-label="Deconnexion" className="icon-button" onClick={onLogout} type="button">
-            <Icons.SignOut size={18} />
-          </button>
-        </div>
-        <div className="sidebar-foot">
-          <span>DataLoop Admin</span>
-          <span>v0.1</span>
         </div>
       </aside>
 
@@ -461,6 +477,7 @@ function AdminShell({ activeView, onNavigate, onLogout, user }) {
 function DashboardPage({ onNavigate }) {
   const [metrics, setMetrics] = useState(null);
   const [alerts, setAlerts] = useState([]);
+  const [pendingTasks, setPendingTasks] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -469,12 +486,14 @@ function DashboardPage({ onNavigate }) {
     setError("");
 
     try {
-      const [dashboardPayload, alertsPayload] = await Promise.all([
+      const [dashboardPayload, alertsPayload, tasksPayload] = await Promise.all([
         getDashboard(),
         getAlerts({ severity: "high" }),
+        getTasks({ status: "en_cours", per_page: 1 }),
       ]);
       setMetrics(dashboardPayload?.data || {});
       setAlerts(alertsPayload?.alerts || []);
+      setPendingTasks(Number(tasksPayload?.meta?.total || 0));
     } catch (caughtError) {
       setError(getApiError(caughtError));
     } finally {
@@ -504,23 +523,16 @@ function DashboardPage({ onNavigate }) {
 
   return (
     <div className="dashboard-stack">
-      <PageIntro
-        eyebrow="Centre de controle"
-        title="Activite, qualite et donnees en un seul plan de travail."
-        body="Les donnees viennent directement des endpoints admin Laravel et gardent les formats de pagination/export prevus par l'API."
-        action={
-          <div className="intro-actions">
-            <button className="cta-button" onClick={() => onNavigate("upload")} type="button">
-              <Icons.CloudArrowUp size={17} weight="bold" />
-              Nouvelle campagne
-            </button>
-            <button className="secondary-button" onClick={() => onNavigate("datasets")} type="button">
-              <Icons.Database size={17} />
-              Exports
-            </button>
-          </div>
-        }
-      />
+      <div className="intro-actions">
+        <button className="cta-button" onClick={() => onNavigate("upload")} type="button">
+          <Icons.CloudArrowUp size={17} weight="bold" />
+          Nouvelle campagne
+        </button>
+        <button className="secondary-button" onClick={() => onNavigate("datasets")} type="button">
+          <Icons.Database size={17} />
+          Exports
+        </button>
+      </div>
 
       <div className="dashboard-grid">
       <Surface className="metric-card metric-large">
@@ -548,6 +560,15 @@ function DashboardPage({ onNavigate }) {
         </div>
         <strong>{formatMoney(metrics?.solde_total_distribue)}</strong>
         <p>Montant total distribue aux contributeurs.</p>
+      </Surface>
+
+      <Surface className="metric-card">
+        <div className="metric-head">
+          <Icons.Image size={22} weight="duotone" />
+          <span>Taches en cours</span>
+        </div>
+        <strong>{formatNumber(pendingTasks)}</strong>
+        <p>En attente de consensus communautaire.</p>
       </Surface>
 
       <Surface className="quality-panel">
@@ -632,6 +653,111 @@ function DashboardPage({ onNavigate }) {
   );
 }
 
+function TasksPage() {
+  const [page, setPage] = useState(1);
+  const [status, setStatus] = useState("");
+  const [payload, setPayload] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const pageData = useMemo(() => normalizePage(payload), [payload]);
+
+  useEffect(() => {
+    async function loadTasks() {
+      setLoading(true);
+      setError("");
+
+      try {
+        const params = { page, per_page: 12 };
+        if (status) params.status = status;
+        setPayload(await getTasks(params));
+      } catch (caughtError) {
+        setError(getApiError(caughtError));
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    loadTasks();
+  }, [page, status]);
+
+  return (
+    <div className="stack">
+      <Surface>
+        <div className="toolbar">
+          <select
+            onChange={(event) => {
+              setStatus(event.target.value);
+              setPage(1);
+            }}
+            value={status}
+          >
+            <option value="">Tous les statuts</option>
+            <option value="nouvelle">Nouvelle</option>
+            <option value="en_cours">En cours</option>
+            <option value="terminee">Terminee</option>
+          </select>
+        </div>
+
+        {error ? <InlineMessage tone="error">{error}</InlineMessage> : null}
+
+        {loading ? (
+          <SkeletonRows />
+        ) : pageData.rows.length ? (
+          <>
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Image</th>
+                    <th>Question</th>
+                    <th>Type</th>
+                    <th>Progression</th>
+                    <th>Statut</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {pageData.rows.map((task) => {
+                    const imageUrl = task.image?.url || task.image?.url_stockage;
+
+                    return (
+                      <tr key={task.id}>
+                        <td>
+                          {imageUrl ? (
+                            <img alt="Tache" className="task-thumb" src={imageUrl} />
+                          ) : (
+                            <span className="task-thumb-empty">--</span>
+                          )}
+                        </td>
+                        <td className="question-cell">
+                          <strong>{task.question || "Question non renseignee"}</strong>
+                        </td>
+                        <td>{task.type_tache || "Non renseigne"}</td>
+                        <td>
+                          {formatNumber(task.annotations_count)} / {formatNumber(task.nb_annotations_requises)}
+                        </td>
+                        <td>
+                          <StatusBadge status={task.statut} />
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            <Pagination meta={pageData.meta} onPage={setPage} />
+          </>
+        ) : (
+          <EmptyState
+            body="Aucune tache ne correspond aux filtres actuels."
+            icon={Icons.List}
+            title="Aucune tache"
+          />
+        )}
+      </Surface>
+    </div>
+  );
+}
+
 function QuickAction({ body, icon: Icon, label, onClick }) {
   return (
     <button className="quick-action" onClick={onClick} type="button">
@@ -644,8 +770,8 @@ function QuickAction({ body, icon: Icon, label, onClick }) {
   );
 }
 
-function UsersPage() {
-  const [search, setSearch] = useState("");
+function UsersPage({ initialSearch = "", onResetSearch }) {
+  const [search, setSearch] = useState(initialSearch);
   const [status, setStatus] = useState("");
   const [sort, setSort] = useState("latest");
   const [page, setPage] = useState(1);
@@ -659,6 +785,12 @@ function UsersPage() {
   const debouncedSearch = useDebouncedValue(search);
 
   const pageData = useMemo(() => normalizePage(payload), [payload]);
+
+  useEffect(() => {
+    if (!initialSearch) return;
+    setSearch(initialSearch);
+    onResetSearch?.();
+  }, [initialSearch, onResetSearch]);
 
   async function loadUsers() {
     setLoading(true);
@@ -717,11 +849,6 @@ function UsersPage() {
 
   return (
     <div className="stack">
-      <PageIntro
-        eyebrow="Moderation"
-        title="Contributeurs, confiance et suspensions."
-        body="Recherche par nom, telephone ou email, filtre par statut et tri par score de confiance."
-      />
       <Surface>
         <div className="toolbar">
           <label className="search-box">
@@ -852,12 +979,16 @@ function UsersPage() {
   );
 }
 
-function AlertsPage({ onOpenUsers }) {
+function AlertsPage({ onOpenUser }) {
   const [severity, setSeverity] = useState("high");
   const [resolved, setResolved] = useState(false);
   const [payload, setPayload] = useState({ alerts: [] });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [taskPreviewId, setTaskPreviewId] = useState(null);
+  const [taskPreview, setTaskPreview] = useState(null);
+  const [taskPreviewLoading, setTaskPreviewLoading] = useState(false);
+  const [taskPreviewError, setTaskPreviewError] = useState("");
 
   async function loadAlerts() {
     setLoading(true);
@@ -876,15 +1007,34 @@ function AlertsPage({ onOpenUsers }) {
     loadAlerts();
   }, [severity, resolved]);
 
+  async function openTaskPreview(taskId) {
+    if (!taskId) return;
+
+    setTaskPreviewId(taskId);
+    setTaskPreview(null);
+    setTaskPreviewError("");
+    setTaskPreviewLoading(true);
+
+    try {
+      setTaskPreview(await getTaskDetails(taskId));
+    } catch (caughtError) {
+      setTaskPreviewError(getApiError(caughtError));
+    } finally {
+      setTaskPreviewLoading(false);
+    }
+  }
+
+  function closeTaskPreview() {
+    setTaskPreviewId(null);
+    setTaskPreview(null);
+    setTaskPreviewError("");
+    setTaskPreviewLoading(false);
+  }
+
   const alerts = payload?.alerts || [];
 
   return (
     <div className="stack">
-      <PageIntro
-        eyebrow="Qualite"
-        title="Les comportements suspects restent visibles rapidement."
-        body="Les alertes s'appuient sur le temps d'execution des annotations et la fenetre active du backend."
-      />
       <Surface>
         <div className="toolbar">
           <div className="segmented-control">
@@ -932,27 +1082,45 @@ function AlertsPage({ onOpenUsers }) {
                 </tr>
               </thead>
               <tbody>
-                {alerts.map((alert) => (
-                  <tr key={alert.id}>
-                    <td>{formatDate(alert.created_at)}</td>
-                    <td>
-                      <div className="identity-inline">
-                        <strong>{alert.utilisateur?.name || "Utilisateur"}</strong>
-                        <small>{alert.utilisateur?.telephone || "Non renseigne"}</small>
-                      </div>
-                    </td>
-                    <td className="question-cell">{alert.tache?.question || "Question non renseignee"}</td>
-                    <td className="danger-text">{formatNumber(alert.temps_execution_ms)} ms</td>
-                    <td>
-                      <SeverityBadge severity={alert.severity || severity} />
-                    </td>
-                    <td>
-                      <button className="small-action" onClick={onOpenUsers} type="button">
-                        Voir profil
-                      </button>
-                    </td>
-                  </tr>
-                ))}
+                {alerts.map((alert) => {
+                  const taskId = alert.tache_id || alert.tache?.id;
+
+                  return (
+                    <tr key={alert.id}>
+                      <td>{formatDate(alert.created_at)}</td>
+                      <td>
+                        <div className="identity-inline">
+                          <strong>{alert.utilisateur?.name || "Utilisateur"}</strong>
+                          <small>{alert.utilisateur?.telephone || "Non renseigne"}</small>
+                        </div>
+                      </td>
+                      <td className="question-cell">{alert.tache?.question || "Question non renseignee"}</td>
+                      <td className="danger-text">{formatNumber(alert.temps_execution_ms)} ms</td>
+                      <td>
+                        <SeverityBadge severity={alert.severity || severity} />
+                      </td>
+                      <td>
+                        <div className="table-actions">
+                          <button
+                            className="small-action"
+                            onClick={() => onOpenUser(alert.utilisateur?.telephone || "")}
+                            type="button"
+                          >
+                            Voir profil
+                          </button>
+                          <button
+                            className="small-action"
+                            disabled={!taskId}
+                            onClick={() => openTaskPreview(taskId)}
+                            type="button"
+                          >
+                            Voir tache
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -964,6 +1132,56 @@ function AlertsPage({ onOpenUsers }) {
           />
         )}
       </Surface>
+
+      {taskPreviewId ? (
+        <Modal className="task-preview-card" onClose={closeTaskPreview} title={`Tache #${taskPreviewId}`}>
+          <div className="modal-form">
+            {taskPreviewLoading ? (
+              <SkeletonRows count={3} />
+            ) : taskPreviewError ? (
+              <InlineMessage tone="error">{taskPreviewError}</InlineMessage>
+            ) : taskPreview ? (
+              <div className="task-preview-layout">
+                {taskPreview.image?.url || taskPreview.image?.url_stockage ? (
+                  <img
+                    alt="Illustration de la tache"
+                    className="task-preview-image"
+                    src={taskPreview.image?.url || taskPreview.image?.url_stockage}
+                  />
+                ) : (
+                  <div className="task-preview-placeholder">
+                    <Icons.Image size={26} />
+                    <span>Image indisponible</span>
+                  </div>
+                )}
+
+                <div className="task-preview-meta">
+                  <p className="eyebrow">Question</p>
+                  <h3>{taskPreview.question || "Question non renseignee"}</h3>
+                  <div className="task-preview-facts">
+                    <span>
+                      <strong>Type:</strong> {taskPreview.type_tache || "Non renseigne"}
+                    </span>
+                    <span>
+                      <strong>Progression:</strong> {formatNumber(taskPreview.annotations_count)} /{" "}
+                      {formatNumber(taskPreview.nb_annotations_requises)}
+                    </span>
+                    <span className="task-preview-status">
+                      <strong>Statut:</strong> <StatusBadge status={taskPreview.statut} />
+                    </span>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <EmptyState
+                body="Impossible de charger les details de cette tache."
+                icon={Icons.Image}
+                title="Tache introuvable"
+              />
+            )}
+          </div>
+        </Modal>
+      ) : null}
     </div>
   );
 }
@@ -1049,11 +1267,6 @@ function UploadPage() {
 
   return (
     <div className="stack">
-      <PageIntro
-        eyebrow="Creation"
-        title="Injecter une campagne d'annotation sans toucher a la base."
-        body="Le formulaire envoie les images dans `images[]` avec le type, la question et les options en multipart/form-data."
-      />
       <div className="upload-grid">
         <Surface>
         <form className="upload-form" onSubmit={submitUpload}>
@@ -1234,11 +1447,6 @@ function DatasetsPage() {
 
   return (
     <div className="stack">
-      <PageIntro
-        eyebrow="Valorisation"
-        title="Datasets prets pour entrainement et analyse."
-        body="Les exports declenchent un telechargement navigateur en conservant le format demande a l'API."
-      />
       <Surface>
         {error ? <InlineMessage tone="error">{error}</InlineMessage> : null}
 
@@ -1340,11 +1548,6 @@ function ConfigPage() {
 
   return (
     <div className="stack">
-      <PageIntro
-        eyebrow="Regles systeme"
-        title="Ajuster le consensus et les taches sentinelles."
-        body="Les reglages sont envoyes au cache systeme du backend et appliques aux validations suivantes."
-      />
       <div className="config-grid">
         <Surface>
         <form className="config-form" onSubmit={submitConfig}>
@@ -1414,8 +1617,9 @@ function ScoreBadge({ value }) {
 }
 
 function StatusBadge({ status }) {
-  const normalized = status || "actif";
-  return <span className={`status-badge ${normalized}`}>{normalized}</span>;
+  const normalized = String(status || "actif").toLowerCase();
+  const label = STATUS_LABELS[normalized] || normalized.replaceAll("_", " ");
+  return <span className={`status-badge ${normalized}`}>{label}</span>;
 }
 
 function SeverityBadge({ severity }) {
@@ -1444,10 +1648,10 @@ function Pagination({ meta, onPage }) {
   );
 }
 
-function Modal({ children, onClose, title }) {
+function Modal({ children, className = "", onClose, title }) {
   return (
     <div className="modal-backdrop" role="presentation">
-      <section aria-modal="true" className="modal-card" role="dialog">
+      <section aria-modal="true" className={`modal-card ${className}`.trim()} role="dialog">
         <div className="modal-header">
           <h2>{title}</h2>
           <button aria-label="Fermer" className="icon-button" onClick={onClose} type="button">

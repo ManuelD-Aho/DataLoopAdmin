@@ -38,6 +38,16 @@ export async function uploadTasks(formData, onUploadProgress) {
   return data;
 }
 
+export async function getTasks(params) {
+  const { data } = await apiClient.get("/tasks", { params });
+  return data;
+}
+
+export async function getTaskDetails(id) {
+  const { data } = await apiClient.get(`/tasks/${id}`);
+  return data.task;
+}
+
 export async function getDatasets(params) {
   const { data } = await apiClient.get("/admin/datasets", { params });
   return data;
