@@ -29,6 +29,12 @@ const NAV_ITEMS = [
     icon: Icons.UsersThree,
   },
   {
+    id: "tasks",
+    label: "Taches",
+    detail: "Suivi des campagnes",
+    icon: Icons.List,
+  },
+  {
     id: "alerts",
     label: "Alertes",
     detail: "Fraude et qualite",
@@ -39,12 +45,6 @@ const NAV_ITEMS = [
     label: "Campagnes",
     detail: "Upload de taches",
     icon: Icons.CloudArrowUp,
-  },
-  {
-    id: "tasks",
-    label: "Taches",
-    detail: "Suivi des campagnes",
-    icon: Icons.List,
   },
   {
     id: "datasets",
@@ -725,7 +725,9 @@ function TasksPage() {
                           {imageUrl ? (
                             <img alt="Tache" className="task-thumb" src={imageUrl} />
                           ) : (
-                            <span className="task-thumb-empty">--</span>
+                            <span className="task-thumb-empty">
+                              <Icons.Image size={18} />
+                            </span>
                           )}
                         </td>
                         <td className="question-cell">
@@ -1156,19 +1158,19 @@ function AlertsPage({ onOpenUser }) {
                 )}
 
                 <div className="task-preview-meta">
-                  <p className="eyebrow">Question</p>
                   <h3>{taskPreview.question || "Question non renseignee"}</h3>
+                  <div className="task-preview-status">
+                    <StatusBadge status={taskPreview.statut} />
+                    <span className="count-pill">
+                      {formatNumber(taskPreview.annotations_count)} /{" "}
+                      {formatNumber(taskPreview.nb_annotations_requises)} avis
+                    </span>
+                  </div>
                   <div className="task-preview-facts">
-                    <span>
-                      <strong>Type:</strong> {taskPreview.type_tache || "Non renseigne"}
-                    </span>
-                    <span>
-                      <strong>Progression:</strong> {formatNumber(taskPreview.annotations_count)} /{" "}
-                      {formatNumber(taskPreview.nb_annotations_requises)}
-                    </span>
-                    <span className="task-preview-status">
-                      <strong>Statut:</strong> <StatusBadge status={taskPreview.statut} />
-                    </span>
+                    <small>Type: {taskPreview.type_tache || "Non renseigne"}</small>
+                    {taskPreview.options_reponse?.length ? (
+                      <small>Options: {taskPreview.options_reponse.join(", ")}</small>
+                    ) : null}
                   </div>
                 </div>
               </div>
