@@ -66,3 +66,7 @@ export async function updateConfig(payload) {
   const { data } = await apiClient.patch("/admin/config", payload);
   return data;
 }
+
+export async function logoutAdmin() {
+  await apiClient.post("/auth/logout");
+}

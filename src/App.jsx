@@ -8,6 +8,7 @@ import {
   getTasks,
   getUsers,
   loginAdmin,
+  logoutAdmin,
   updateConfig,
   updateUserStatus,
   uploadTasks,
@@ -58,6 +59,87 @@ const NAV_ITEMS = [
     detail: "Regles systeme",
     icon: Icons.GearSix,
   },
+  {
+    id: "access",
+    label: "Securite & Acces",
+    detail: "Habilitations",
+    icon: Icons.ShieldCheck,
+  },
+];
+
+const ACCESS_STORAGE_KEYS = {
+  roles: "dataloop_roles",
+  assignments: "dataloop_assignments",
+  audit: "dataloop_audit",
+};
+
+const ACCESS_PERMISSION_GROUPS = [
+  {
+    id: "menus",
+    label: "Acces aux menus",
+    permissions: NAV_ITEMS.map((item) => ({
+      id: item.id,
+      label: item.label,
+      detail: item.detail,
+    })),
+  },
+  {
+    id: "actions",
+    label: "Actions sensibles",
+    permissions: [
+      {
+        id: "action.upload_campaign",
+        label: "Uploader une campagne",
+        detail: "Creation de taches depuis des images",
+      },
+      {
+        id: "action.export_datasets",
+        label: "Exporter les datasets",
+        detail: "Telechargement CSV et JSON",
+      },
+      {
+        id: "action.moderate_users",
+        label: "Moderation utilisateurs",
+        detail: "Suspension et reactivation des comptes",
+      },
+      {
+        id: "action.update_config",
+        label: "Modifier la configuration",
+        detail: "Consensus et frequence sentinelle",
+      },
+      {
+        id: "action.manage_access",
+        label: "Gerer les habilitations",
+        detail: "Roles, attributions et audit local",
+      },
+    ],
+  },
+];
+
+const ALL_ACCESS_PERMISSIONS = ACCESS_PERMISSION_GROUPS.flatMap((group) => group.permissions);
+const MENU_PERMISSION_IDS = NAV_ITEMS.map((item) => item.id);
+const FULL_ACCESS_PERMISSIONS = ALL_ACCESS_PERMISSIONS.map((permission) => permission.id);
+
+const DEFAULT_ROLES = [
+  {
+    id: "super_admin",
+    name: "Super Administrateur",
+    description: "Acces complet aux menus, actions critiques et habilitations.",
+    locked: true,
+    permissions: FULL_ACCESS_PERMISSIONS,
+  },
+  {
+    id: "moderateur",
+    name: "Moderateur",
+    description: "Surveillance des utilisateurs, taches et alertes.",
+    permissions: ["dashboard", "users", "tasks", "alerts", "action.moderate_users"],
+  },
+  {
+    id: "analyste",
+    name: "Data Analyst",
+    description: "Lecture des indicateurs, taches et exports valides.",
+    permissions: ["dashboard", "tasks", "datasets", "action.export_datasets"],
+  },
 ];
 
 const PREVIEWS = [
@@ -83,6 +165,25 @@ const STATUS_LABELS = {
   terminee: "Terminee",
 };
 
+const AUDIT_CATEGORY_LABELS = {
+  all: "Tout",
+  api: "API",
+  auth: "Session",
+  config: "Config",
+  data: "Datasets",
+  navigation: "Menus",
+  rbac: "RBAC",
+  tasks: "Campagnes",
+  users: "Utilisateurs",
+};
+
+const AUDIT_SEVERITY_LABELS = {
+  critical: "Critique",
+  high: "Risque",
+  info: "Info",
+  medium: "Controle",
+};
+
 function readSession() {
   const token = localStorage.getItem(TOKEN_KEY);
   const rawUser = localStorage.getItem(USER_KEY);
@@ -105,6 +206,96 @@ function saveSession(data) {
 function clearSession() {
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(USER_KEY);
+}
+
+function readLocalJson(key, fallback) {
+  try {
+    const stored = localStorage.getItem(key);
+    return stored ? JSON.parse(stored) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function normalizeStoredRoles(value) {
+  if (!Array.isArray(value) || !value.length) return DEFAULT_ROLES;
+
+  const knownPermissions = new Set(ALL_ACCESS_PERMISSIONS.map((permission) => permission.id));
+  return value.map((role) => {
+    const fallback = DEFAULT_ROLES.find((item) => item.id === role?.id);
+    const storedPermissions = Array.isArray(role?.permissions)
+      ? role.permissions.filter((permission) => knownPermissions.has(permission))
+      : fallback?.permissions || ["dashboard"];
+    const permissions = fallback?.locked
+      ? Array.from(new Set([...(fallback.permissions || []), ...storedPermissions]))
+      : storedPermissions;
+
+    return {
+      id: role?.id || `role_${Date.now()}`,
+      name: role?.name || fallback?.name || "Role personnalise",
+      description: role?.description || fallback?.description || "Role cree pour la demo.",
+      locked: Boolean(role?.locked || fallback?.locked),
+      permissions: permissions.length ? permissions : ["dashboard"],
+    };
+  });
+}
+
+function getUserKey(user) {
+  return String(user?.id || user?.telephone || user?.email || "current_admin");
+}
+
+function formatActor(user) {
+  return user?.name || user?.telephone || "Admin DataLoop";
+}
+
+function getRoleName(roles, roleId) {
+  return roles.find((role) => role.id === roleId)?.name || "Role inconnu";
+}
+
+function getApiAssetOrigin() {
+  try {
+    return new URL(API_BASE_URL).origin;
+  } catch {
+    return API_BASE_URL.replace(/\/api\/v\d+\/?$/i, "").replace(/\/+$/, "");
+  }
+}
+
+function resolveStorageImageUrl(value) {
+  if (!value) return "";
+
+  const raw = String(value).trim();
+  if (!raw) return "";
+
+  const assetOrigin = getApiAssetOrigin();
+
+  try {
+    const parsed = new URL(raw);
+    const host = parsed.hostname.toLowerCase();
+
+    if (host === "localhost" || host === "127.0.0.1" || host === "::1") {
+      return `${assetOrigin}${parsed.pathname}${parsed.search}${parsed.hash}`;
+    }
+
+    return parsed.href;
+  } catch {
+    const path = raw.replace(/^public\//i, "").replace(/^\/+/, "");
+    if (!path) return "";
+
+    return path.startsWith("storage/")
+      ? `${assetOrigin}/${path}`
+      : `${assetOrigin}/storage/${path}`;
+  }
+}
+
+function getTaskImageUrl(task) {
+  return resolveStorageImageUrl(
+    task?.image?.url ||
+      task?.image?.url_stockage ||
+      task?.image?.path ||
+      task?.image_url ||
+      task?.url_stockage ||
+      task?.image_path
+  );
 }
 
 function formatNumber(value) {
@@ -165,6 +356,19 @@ function InlineMessage({ tone = "info", children }) {
         <Icons.CheckCircle size={18} weight="duotone" />
       )}
       <span>{children}</span>
+    </div>
+  );
+}
+
+function PageIntro({ actions, body, eyebrow, title }) {
+  return (
+    <div className="page-intro">
+      <div>
+        <p className="eyebrow">{eyebrow}</p>
+        <h2>{title}</h2>
+        {body ? <p>{body}</p> : null}
+      </div>
+      {actions ? <div className="intro-actions">{actions}</div> : null}
     </div>
   );
 }
@@ -230,7 +434,13 @@ function App() {
     setActiveView("dashboard");
   }
 
-  function handleLogout() {
+  async function handleLogout() {
+    try {
+      await logoutAdmin();
+    } catch (caughtError) {
+      console.warn("Erreur API logout, deconnexion locale forcee.", caughtError);
+    }
+
     clearSession();
     setSession(null);
     setAuthNotice("Tu as ete deconnecte.");
@@ -347,7 +557,40 @@ function LoginScreen({ notice, onLogin }) {
 function AdminShell({ activeView, onNavigate, onLogout, user }) {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [userSearchKey, setUserSearchKey] = useState("");
-  const activeItem = NAV_ITEMS.find((item) => item.id === activeView) || NAV_ITEMS[0];
+  const [roles, setRoles] = useState(() =>
+    normalizeStoredRoles(readLocalJson(ACCESS_STORAGE_KEYS.roles, DEFAULT_ROLES))
+  );
+  const [assignments, setAssignments] = useState(() =>
+    readLocalJson(ACCESS_STORAGE_KEYS.assignments, {})
+  );
+
+  useEffect(() => {
+    localStorage.setItem(ACCESS_STORAGE_KEYS.roles, JSON.stringify(roles));
+  }, [roles]);
+
+  useEffect(() => {
+    localStorage.setItem(ACCESS_STORAGE_KEYS.assignments, JSON.stringify(assignments));
+  }, [assignments]);
+
+  const myUserKey = getUserKey(user);
+  const myRoleId = assignments[myUserKey] || "super_admin";
+  const currentRole = roles.find((role) => role.id === myRoleId) || roles[0] || DEFAULT_ROLES[0];
+  const currentPermissions = useMemo(
+    () => new Set(currentRole?.permissions || []),
+    [currentRole]
+  );
+  const visibleNavItems = NAV_ITEMS.filter((item) => currentPermissions.has(item.id));
+  const safeActiveView = currentPermissions.has(activeView)
+    ? activeView
+    : visibleNavItems[0]?.id || "dashboard";
+  const activeItem = NAV_ITEMS.find((item) => item.id === safeActiveView) || NAV_ITEMS[0];
+  const can = (permission) => currentPermissions.has(permission);
+
+  useEffect(() => {
+    if (safeActiveView !== activeView) {
+      onNavigate(safeActiveView);
+    }
+  }, [activeView, onNavigate, safeActiveView]);
 
   function navigate(view) {
     onNavigate(view);
@@ -356,7 +599,13 @@ function AdminShell({ activeView, onNavigate, onLogout, user }) {
 
   const content = {
     dashboard: <DashboardPage onNavigate={onNavigate} />,
-    users: <UsersPage initialSearch={userSearchKey} onResetSearch={() => setUserSearchKey("")} />,
+    users: (
+      <UsersPage
+        canModerate={can("action.moderate_users")}
+        initialSearch={userSearchKey}
+        onResetSearch={() => setUserSearchKey("")}
+      />
+    ),
     alerts: (
       <AlertsPage
         onOpenUser={(telephone) => {
@@ -365,11 +614,21 @@ function AdminShell({ activeView, onNavigate, onLogout, user }) {
         }}
       />
     ),
-    upload: <UploadPage />,
+    upload: <UploadPage canUpload={can("action.upload_campaign")} />,
     tasks: <TasksPage />,
-    datasets: <DatasetsPage />,
-    config: <ConfigPage />,
-  }[activeView];
+    datasets: <DatasetsPage canExport={can("action.export_datasets")} />,
+    config: <ConfigPage canUpdateConfig={can("action.update_config")} />,
+    access: (
+      <AccessPage
+        assignments={assignments}
+        currentRoleId={myRoleId}
+        roles={roles}
+        setAssignments={setAssignments}
+        setRoles={setRoles}
+        user={user}
+      />
+    ),
+  }[safeActiveView];
 
   return (
     <div className="admin-shell">
@@ -391,9 +650,9 @@ function AdminShell({ activeView, onNavigate, onLogout, user }) {
 
         <div className="sidebar-scroll">
           <nav className="sidebar-nav" aria-label="Navigation admin">
-            {NAV_ITEMS.map((item) => {
+            {visibleNavItems.map((item) => {
               const Icon = item.icon;
-              const isActive = item.id === activeView;
+              const isActive = item.id === safeActiveView;
 
               return (
                 <button
@@ -411,7 +670,9 @@ function AdminShell({ activeView, onNavigate, onLogout, user }) {
               );
             })}
           </nav>
+        </div>
 
+        <div className="sidebar-bottom">
           <div className="sidebar-card">
             <span className="mini-label">Connexion API</span>
             <strong>{API_BASE_URL.replace("https://", "")}</strong>
@@ -420,9 +681,7 @@ function AdminShell({ activeView, onNavigate, onLogout, user }) {
               <Icons.ArrowRight size={13} weight="bold" />
             </a>
           </div>
-        </div>
 
-        <div className="sidebar-bottom">
           <div className="sidebar-user">
             <div className="avatar">
               <Icons.UserCircle size={28} weight="duotone" />
@@ -466,7 +725,7 @@ function AdminShell({ activeView, onNavigate, onLogout, user }) {
           </button>
         </header>
 
-        <div className="page-content" key={activeView}>
+        <div className="page-content" key={safeActiveView}>
           {content}
         </div>
       </main>
@@ -717,13 +976,25 @@ function TasksPage() {
                 </thead>
                 <tbody>
                   {pageData.rows.map((task) => {
-                    const imageUrl = task.image?.url || task.image?.url_stockage;
+                    const imageUrl = getTaskImageUrl(task);
 
                     return (
                       <tr key={task.id}>
                         <td>
                           {imageUrl ? (
-                            <img alt="Tache" className="task-thumb" src={imageUrl} />
+                            <span className="task-thumb-frame">
+                              <img
+                                alt="Tache"
+                                className="task-thumb"
+                                onError={(event) => {
+                                  event.currentTarget.parentElement?.classList.add("failed");
+                                }}
+                                src={imageUrl}
+                              />
+                              <span className="task-thumb-empty task-thumb-fallback">
+                                <Icons.Image size={18} />
+                              </span>
+                            </span>
                           ) : (
                             <span className="task-thumb-empty">
                               <Icons.Image size={18} />
@@ -772,7 +1043,7 @@ function QuickAction({ body, icon: Icon, label, onClick }) {
   );
 }
 
-function UsersPage({ initialSearch = "", onResetSearch }) {
+function UsersPage({ canModerate = true, initialSearch = "", onResetSearch }) {
   const [search, setSearch] = useState(initialSearch);
   const [status, setStatus] = useState("");
   const [sort, setSort] = useState("latest");
@@ -826,7 +1097,7 @@ function UsersPage({ initialSearch = "", onResetSearch }) {
 
   async function submitStatusUpdate(event) {
     event.preventDefault();
-    if (!selectedUser) return;
+    if (!selectedUser || !canModerate) return;
 
     const nextStatus = selectedUser.statut === "suspendu" ? "actif" : "suspendu";
     setSaving(true);
@@ -881,6 +1152,11 @@ function UsersPage({ initialSearch = "", onResetSearch }) {
 
         {notice ? <InlineMessage>{notice}</InlineMessage> : null}
         {error ? <InlineMessage tone="error">{error}</InlineMessage> : null}
+        {!canModerate ? (
+          <InlineMessage>
+            Mode lecture seule: la suspension et la reactivation des comptes sont reservees aux roles autorises.
+          </InlineMessage>
+        ) : null}
 
         {loading ? (
           <SkeletonRows />
@@ -919,16 +1195,20 @@ function UsersPage({ initialSearch = "", onResetSearch }) {
                         <StatusBadge status={user.statut} />
                       </td>
                       <td>
-                        <button
-                          className="small-action"
-                          onClick={() => {
-                            setSelectedUser(user);
-                            setMotif("");
-                          }}
-                          type="button"
-                        >
-                          {user.statut === "suspendu" ? "Reactiver" : "Suspendre"}
-                        </button>
+                        {canModerate ? (
+                          <button
+                            className="small-action"
+                            onClick={() => {
+                              setSelectedUser(user);
+                              setMotif("");
+                            }}
+                            type="button"
+                          >
+                            {user.statut === "suspendu" ? "Reactiver" : "Suspendre"}
+                          </button>
+                        ) : (
+                          <span className="count-pill">Lecture</span>
+                        )}
                       </td>
                     </tr>
                   ))}
@@ -946,7 +1226,7 @@ function UsersPage({ initialSearch = "", onResetSearch }) {
         )}
       </Surface>
 
-      {selectedUser ? (
+      {selectedUser && canModerate ? (
         <Modal onClose={() => setSelectedUser(null)} title="Modifier le statut">
           <form className="modal-form" onSubmit={submitStatusUpdate}>
             <p>
@@ -1188,7 +1468,7 @@ function AlertsPage({ onOpenUser }) {
   );
 }
 
-function UploadPage() {
+function UploadPage({ canUpload = true }) {
   const inputRef = useRef(null);
   const [files, setFiles] = useState([]);
   const [dragging, setDragging] = useState(false);
@@ -1232,6 +1512,11 @@ function UploadPage() {
     setError("");
     setResult("");
 
+    if (!canUpload) {
+      setError("Ton role ne permet pas de creer une campagne.");
+      return;
+    }
+
     const cleanOptions = options.map((option) => option.trim()).filter(Boolean);
 
     if (!files.length) {
@@ -1272,11 +1557,20 @@ function UploadPage() {
       <div className="upload-grid">
         <Surface>
         <form className="upload-form" onSubmit={submitUpload}>
+          {!canUpload ? (
+            <InlineMessage>
+              Mode lecture seule: l'upload de campagnes est desactive pour ce role.
+            </InlineMessage>
+          ) : null}
+
           <div
-            className={`dropzone ${dragging ? "dragging" : ""}`}
-            onClick={() => inputRef.current?.click()}
+            className={`dropzone ${dragging ? "dragging" : ""} ${!canUpload ? "disabled" : ""}`}
+            onClick={() => {
+              if (canUpload) inputRef.current?.click();
+            }}
             onDragEnter={(event) => {
               event.preventDefault();
+              if (!canUpload) return;
               setDragging(true);
             }}
             onDragLeave={(event) => {
@@ -1287,6 +1581,7 @@ function UploadPage() {
             onDrop={(event) => {
               event.preventDefault();
               setDragging(false);
+              if (!canUpload) return;
               addFiles(event.dataTransfer.files);
             }}
             role="button"
@@ -1296,6 +1591,7 @@ function UploadPage() {
               accept="image/*"
               multiple
               onChange={(event) => addFiles(event.target.files)}
+              disabled={!canUpload}
               ref={inputRef}
               type="file"
             />
@@ -1325,12 +1621,20 @@ function UploadPage() {
           <div className="form-grid">
             <label className="field">
               <span>Type de tache</span>
-              <input onChange={(event) => setTypeTache(event.target.value)} value={typeTache} />
+              <input
+                disabled={!canUpload}
+                onChange={(event) => setTypeTache(event.target.value)}
+                value={typeTache}
+              />
             </label>
 
             <label className="field">
               <span>Question</span>
-              <input onChange={(event) => setQuestion(event.target.value)} value={question} />
+              <input
+                disabled={!canUpload}
+                onChange={(event) => setQuestion(event.target.value)}
+                value={question}
+              />
             </label>
           </div>
 
@@ -1342,6 +1646,7 @@ function UploadPage() {
               </div>
               <button
                 className="secondary-button compact"
+                disabled={!canUpload}
                 onClick={() => setOptions((current) => [...current, ""])}
                 type="button"
               >
@@ -1352,13 +1657,14 @@ function UploadPage() {
               <div className="option-row" key={index}>
                 <input
                   onChange={(event) => updateOption(index, event.target.value)}
+                  disabled={!canUpload}
                   placeholder={`Option ${index + 1}`}
                   value={option}
                 />
                 <button
                   aria-label="Retirer cette option"
                   className="icon-button"
-                  disabled={options.length <= 1}
+                  disabled={!canUpload || options.length <= 1}
                   onClick={() => removeOption(index)}
                   type="button"
                 >
@@ -1377,7 +1683,7 @@ function UploadPage() {
             </div>
           ) : null}
 
-          <button className="cta-button submit-button" disabled={submitting} type="submit">
+          <button className="cta-button submit-button" disabled={submitting || !canUpload} type="submit">
             <span>{submitting ? `Upload ${progress}%` : "Creer la campagne"}</span>
             <span className="button-icon">
               <Icons.ArrowRight size={17} weight="bold" />
@@ -1400,7 +1706,7 @@ function UploadPage() {
   );
 }
 
-function DatasetsPage() {
+function DatasetsPage({ canExport = true }) {
   const [page, setPage] = useState(1);
   const [payload, setPayload] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -1426,6 +1732,11 @@ function DatasetsPage() {
   }, [page]);
 
   async function handleExport(dataset, format) {
+    if (!canExport) {
+      setError("Ton role ne permet pas d'exporter les datasets.");
+      return;
+    }
+
     const key = `${dataset.id}-${format}`;
     setDownloading(key);
     setError("");
@@ -1451,6 +1762,11 @@ function DatasetsPage() {
     <div className="stack">
       <Surface>
         {error ? <InlineMessage tone="error">{error}</InlineMessage> : null}
+        {!canExport ? (
+          <InlineMessage>
+            Mode lecture seule: les exports CSV et JSON sont reserves aux roles autorises.
+          </InlineMessage>
+        ) : null}
 
         {loading ? (
           <SkeletonRows />
@@ -1483,24 +1799,30 @@ function DatasetsPage() {
                       <td>{formatDate(dataset.created_at)}</td>
                       <td>
                         <div className="table-actions">
-                          <button
-                            className="small-action export-action"
-                            disabled={downloading === `${dataset.id}-csv`}
-                            onClick={() => handleExport(dataset, "csv")}
-                            type="button"
-                          >
-                            <Icons.DownloadSimple size={15} />
-                            CSV
-                          </button>
-                          <button
-                            className="small-action export-action"
-                            disabled={downloading === `${dataset.id}-json`}
-                            onClick={() => handleExport(dataset, "json")}
-                            type="button"
-                          >
-                            <Icons.DownloadSimple size={15} />
-                            JSON
-                          </button>
+                          {canExport ? (
+                            <>
+                              <button
+                                className="small-action export-action"
+                                disabled={downloading === `${dataset.id}-csv`}
+                                onClick={() => handleExport(dataset, "csv")}
+                                type="button"
+                              >
+                                <Icons.DownloadSimple size={15} />
+                                CSV
+                              </button>
+                              <button
+                                className="small-action export-action"
+                                disabled={downloading === `${dataset.id}-json`}
+                                onClick={() => handleExport(dataset, "json")}
+                                type="button"
+                              >
+                                <Icons.DownloadSimple size={15} />
+                                JSON
+                              </button>
+                            </>
+                          ) : (
+                            <span className="count-pill">Lecture</span>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -1522,7 +1844,876 @@ function DatasetsPage() {
   );
 }
 
-function ConfigPage() {
+function AccessPage({ assignments, currentRoleId, roles, setAssignments, setRoles, user }) {
+  const [activeTab, setActiveTab] = useState("roles");
+  const [apiUsers, setApiUsers] = useState([]);
+  const [loadingUsers, setLoadingUsers] = useState(false);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [roleDraft, setRoleDraft] = useState({ description: "", name: "" });
+  const [editingRoleId, setEditingRoleId] = useState("");
+  const [editDraft, setEditDraft] = useState({ description: "", name: "" });
+  const [auditTrail, setAuditTrail] = useState(() =>
+    readLocalJson(ACCESS_STORAGE_KEYS.audit, [])
+  );
+  const [auditFilter, setAuditFilter] = useState("all");
+  const noticeTimerRef = useRef(null);
+
+  const currentRole = roles.find((role) => role.id === currentRoleId) || roles[0];
+  const canManageAccess = currentRole?.permissions?.includes("action.manage_access");
+  const currentUserKey = getUserKey(user);
+  const permissionById = useMemo(
+    () => new Map(ALL_ACCESS_PERMISSIONS.map((permission) => [permission.id, permission])),
+    []
+  );
+  const auditStats = useMemo(() => {
+    const todayKey = new Date().toISOString().slice(0, 10);
+    const actorIds = new Set();
+
+    auditTrail.forEach((entry) => {
+      if (entry.actorId || entry.actor) actorIds.add(entry.actorId || entry.actor);
+    });
+
+    return {
+      actors: actorIds.size,
+      critical: auditTrail.filter((entry) => ["critical", "high"].includes(entry.severity)).length,
+      simulated: auditTrail.filter((entry) => entry.source === "simulation").length,
+      today: auditTrail.filter((entry) => entry.at?.startsWith(todayKey)).length,
+      total: auditTrail.length,
+    };
+  }, [auditTrail]);
+  const filteredAuditTrail = useMemo(() => {
+    if (auditFilter === "all") return auditTrail;
+    return auditTrail.filter((entry) => entry.category === auditFilter);
+  }, [auditFilter, auditTrail]);
+
+  useEffect(() => {
+    localStorage.setItem(ACCESS_STORAGE_KEYS.audit, JSON.stringify(auditTrail));
+  }, [auditTrail]);
+
+  useEffect(() => {
+    return () => {
+      if (noticeTimerRef.current) window.clearTimeout(noticeTimerRef.current);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (activeTab !== "users" || apiUsers.length) return;
+
+    setLoadingUsers(true);
+    setError("");
+
+    getUsers({ per_page: 50 })
+      .then((payload) => setApiUsers(normalizePage(payload).rows))
+      .catch((caughtError) => setError(getApiError(caughtError)))
+      .finally(() => setLoadingUsers(false));
+  }, [activeTab, apiUsers.length]);
+
+  function showNotice(message) {
+    setNotice(message);
+    if (noticeTimerRef.current) window.clearTimeout(noticeTimerRef.current);
+    noticeTimerRef.current = window.setTimeout(() => setNotice(""), 2800);
+  }
+
+  function pushAudit(action, target, detail, before = null, after = null, meta = {}) {
+    const entry = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      action,
+      actor: formatActor(user),
+      actorId: getUserKey(user),
+      after,
+      at: new Date().toISOString(),
+      before,
+      category: meta.category || "rbac",
+      detail,
+      severity: meta.severity || "info",
+      source: meta.source || "front-demo",
+      target,
+    };
+
+    setAuditTrail((current) => [entry, ...current].slice(0, 150));
+  }
+
+  function createRoleId(name) {
+    const base = name
+      .toLowerCase()
+      .trim()
+      .replace(/[^a-z0-9]+/g, "_")
+      .replace(/^_+|_+$/g, "");
+    const root = base || `role_${Date.now()}`;
+    let candidate = root;
+    let index = 2;
+
+    while (roles.some((role) => role.id === candidate)) {
+      candidate = `${root}_${index}`;
+      index += 1;
+    }
+
+    return candidate;
+  }
+
+  function requireManageAccess() {
+    if (canManageAccess) return true;
+    showNotice("Ton role permet de consulter ce module, pas de le modifier.");
+    return false;
+  }
+
+  function createRole(event) {
+    event.preventDefault();
+    if (!requireManageAccess()) return;
+
+    const name = roleDraft.name.trim();
+    const description = roleDraft.description.trim();
+
+    if (!name) {
+      showNotice("Renseigne un nom de groupe.");
+      return;
+    }
+
+    const role = {
+      id: createRoleId(name),
+      name,
+      description: description || "Groupe personnalise pour la demo.",
+      permissions: ["dashboard"],
+    };
+
+    setRoles((current) => [...current, role]);
+    setRoleDraft({ description: "", name: "" });
+    pushAudit("role_created", role.name, "Groupe cree avec acces initial au dashboard.", null, role, {
+      category: "rbac",
+      severity: "medium",
+    });
+    showNotice("Groupe cree.");
+  }
+
+  function startRoleEdit(role) {
+    if (!requireManageAccess() || role.locked) return;
+    setEditingRoleId(role.id);
+    setEditDraft({ description: role.description || "", name: role.name });
+  }
+
+  function saveRoleEdit(role) {
+    if (!requireManageAccess()) return;
+
+    const nextName = editDraft.name.trim();
+    const nextDescription = editDraft.description.trim();
+
+    if (!nextName) {
+      showNotice("Le nom du groupe est obligatoire.");
+      return;
+    }
+
+    const before = { description: role.description || "", name: role.name };
+    const after = {
+      description: nextDescription || "Groupe personnalise pour la demo.",
+      name: nextName,
+    };
+
+    setRoles((current) =>
+      current.map((item) => (item.id === role.id ? { ...item, ...after } : item))
+    );
+    setEditingRoleId("");
+
+    if (before.name !== after.name || before.description !== after.description) {
+      pushAudit("role_updated", after.name, "Nom ou description du groupe modifie.", before, after, {
+        category: "rbac",
+        severity: "medium",
+      });
+    }
+
+    showNotice("Groupe mis a jour.");
+  }
+
+  function countAssignedUsers(roleId) {
+    return Object.values(assignments).filter((assignedRoleId) => assignedRoleId === roleId).length;
+  }
+
+  function deleteRole(role) {
+    if (!requireManageAccess()) return;
+
+    const assignedCount = countAssignedUsers(role.id);
+
+    if (role.locked) {
+      showNotice("Le groupe natif Super Administrateur ne peut pas etre supprime.");
+      return;
+    }
+
+    if (assignedCount > 0) {
+      showNotice("Retire d'abord les utilisateurs affectes a ce groupe.");
+      return;
+    }
+
+    setRoles((current) => current.filter((item) => item.id !== role.id));
+    pushAudit("role_deleted", role.name, "Groupe supprime.", role, null, {
+      category: "rbac",
+      severity: "high",
+    });
+    showNotice("Groupe supprime.");
+  }
+
+  function togglePermission(role, permissionId) {
+    if (!requireManageAccess()) return;
+
+    const permission = permissionById.get(permissionId);
+    const hasPermission = role.permissions.includes(permissionId);
+    const isMenuPermission = MENU_PERMISSION_IDS.includes(permissionId);
+    const remainingMenus = role.permissions.filter((item) => MENU_PERMISSION_IDS.includes(item));
+    const protectsCurrentAdmin =
+      role.id === currentRoleId &&
+      hasPermission &&
+      (permissionId === "access" || permissionId === "action.manage_access");
+
+    if (role.locked) {
+      showNotice("Le groupe Super Administrateur reste verrouille pour la demo.");
+      return;
+    }
+
+    if (protectsCurrentAdmin) {
+      showNotice("Tu ne peux pas retirer ton propre acces aux habilitations.");
+      return;
+    }
+
+    if (hasPermission && isMenuPermission && remainingMenus.length <= 1) {
+      showNotice("Un groupe doit conserver au moins un menu visible.");
+      return;
+    }
+
+    const nextPermissions = hasPermission
+      ? role.permissions.filter((item) => item !== permissionId)
+      : [...role.permissions, permissionId];
+
+    setRoles((current) =>
+      current.map((item) =>
+        item.id === role.id ? { ...item, permissions: nextPermissions } : item
+      )
+    );
+
+    pushAudit(
+      hasPermission ? "permission_removed" : "permission_added",
+      role.name,
+      permission?.label || permissionId,
+      { permissions: role.permissions },
+      { permissions: nextPermissions },
+      { category: "rbac", severity: "medium" }
+    );
+    showNotice("Permission mise a jour.");
+  }
+
+  function assignRoleToUser(apiUser, roleId) {
+    if (!requireManageAccess()) return;
+
+    const userKey = getUserKey(apiUser);
+    if (userKey === currentUserKey) {
+      showNotice("Tu ne peux pas modifier ton propre groupe pendant la demo.");
+      return;
+    }
+
+    const previousRoleId = assignments[userKey] || "super_admin";
+
+    if (previousRoleId === roleId) return;
+
+    setAssignments((current) => ({ ...current, [userKey]: roleId }));
+    pushAudit(
+      "role_assigned",
+      apiUser.name || apiUser.telephone || userKey,
+      `${getRoleName(roles, previousRoleId)} -> ${getRoleName(roles, roleId)}`,
+      { roleId: previousRoleId },
+      { roleId },
+      { category: "rbac", severity: "medium" }
+    );
+    showNotice("Attribution enregistree.");
+  }
+
+  function exportAudit() {
+    const blob = new Blob([JSON.stringify(auditTrail, null, 2)], {
+      type: "application/json",
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `dataloop_audit_${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+    pushAudit("audit_exported", "Piste d'audit", `${auditTrail.length} evenement(s) exporte(s).`, null, null, {
+      category: "data",
+      severity: "medium",
+    });
+    showNotice("Journal d'audit exporte.");
+  }
+
+  function createSimulatedAuditEntries() {
+    const now = Date.now();
+    const actor = formatActor(user);
+    const actorId = getUserKey(user);
+    const simulatedUser = apiUsers.find((item) => getUserKey(item) !== currentUserKey);
+    const collaborator =
+      simulatedUser?.name || simulatedUser?.telephone || "Aminata Kone, Data Analyst";
+
+    const scenarios = [
+      {
+        action: "session_login",
+        category: "auth",
+        detail: "Connexion admin acceptee via token Sanctum.",
+        severity: "info",
+        target: "Session back-office",
+      },
+      {
+        action: "dashboard_viewed",
+        category: "navigation",
+        detail: "Ouverture de la vue d'ensemble et lecture des indicateurs financiers.",
+        severity: "info",
+        target: "Vue d'ensemble",
+      },
+      {
+        action: "forbidden_access",
+        category: "api",
+        detail: "Tentative d'appel API sans permission action.export_datasets, reponse 403 simulee.",
+        severity: "high",
+        target: "GET /api/v1/admin/datasets/export",
+      },
+      {
+        action: "role_created",
+        after: { name: "Auditeur externe", permissions: ["dashboard", "datasets"] },
+        category: "rbac",
+        detail: "Groupe cree pour une lecture limitee des exports valides.",
+        severity: "medium",
+        target: "Auditeur externe",
+      },
+      {
+        action: "permission_added",
+        after: { permissions: ["dashboard", "datasets", "action.export_datasets"] },
+        before: { permissions: ["dashboard", "datasets"] },
+        category: "rbac",
+        detail: "Ajout du droit Exporter les datasets.",
+        severity: "medium",
+        target: "Auditeur externe",
+      },
+      {
+        action: "role_assigned",
+        after: { roleId: "analyste" },
+        before: { roleId: "moderateur" },
+        category: "rbac",
+        detail: `${collaborator} passe de Moderateur a Data Analyst.`,
+        severity: "medium",
+        target: collaborator,
+      },
+      {
+        action: "user_suspended",
+        after: { status: "suspendu" },
+        before: { status: "actif" },
+        category: "users",
+        detail: "Suspension apres fraude detectee sur plusieurs validations.",
+        severity: "high",
+        target: "+225 07 48 16 92 31",
+      },
+      {
+        action: "user_reactivated",
+        after: { status: "actif" },
+        before: { status: "suspendu" },
+        category: "users",
+        detail: "Reactivation apres verification manuelle du dossier.",
+        severity: "medium",
+        target: "+225 05 62 73 18 44",
+      },
+      {
+        action: "campaign_uploaded",
+        after: { images: 18, status: "en_cours" },
+        category: "tasks",
+        detail: "Nouvelle campagne image chargee depuis le back-office.",
+        severity: "medium",
+        target: "Campagne CI-Abidjan-047",
+      },
+      {
+        action: "task_created",
+        after: { question: "Identifier l'etat de la route", type: "image_labeling" },
+        category: "tasks",
+        detail: "Tache creee automatiquement depuis le lot d'images importe.",
+        severity: "info",
+        target: "Tache #DL-8042",
+      },
+      {
+        action: "task_status_changed",
+        after: { status: "terminee" },
+        before: { status: "en_cours" },
+        category: "tasks",
+        detail: "Consensus atteint, la tache entre dans le dataset valide.",
+        severity: "info",
+        target: "Tache #DL-8042",
+      },
+      {
+        action: "alert_reviewed",
+        after: { status: "traitee" },
+        before: { status: "nouvelle" },
+        category: "users",
+        detail: "Alerte fraude analysee depuis le module Alertes.",
+        severity: "high",
+        target: "Alerte #FR-219",
+      },
+      {
+        action: "dataset_exported",
+        category: "data",
+        detail: "Export JSON genere pour le dataset de validation.",
+        severity: "medium",
+        target: "dataset_12.json",
+      },
+      {
+        action: "config_updated",
+        after: { freq_sentinelle: 10, seuil_consensus: 72 },
+        before: { freq_sentinelle: 8, seuil_consensus: 66 },
+        category: "config",
+        detail: "Seuil de consensus et frequence sentinelle ajustes.",
+        severity: "high",
+        target: "Regles systeme",
+      },
+      {
+        action: "token_revoked",
+        category: "auth",
+        detail: "Deconnexion propre, token Sanctum invalide cote serveur.",
+        severity: "info",
+        target: "POST /api/v1/auth/logout",
+      },
+      {
+        action: "audit_exported",
+        category: "data",
+        detail: "Export du journal local pour revue de gouvernance.",
+        severity: "medium",
+        target: "Piste d'audit",
+      },
+    ];
+
+    return scenarios.map((scenario, index) => ({
+      actor,
+      actorId,
+      after: scenario.after || null,
+      at: new Date(now - index * 5 * 60 * 1000).toISOString(),
+      before: scenario.before || null,
+      id: `sim-${now}-${index}`,
+      source: "simulation",
+      ...scenario,
+    }));
+  }
+
+  function simulateAuditTrail() {
+    const simulatedEntries = createSimulatedAuditEntries();
+    setAuditTrail((current) => [...simulatedEntries, ...current].slice(0, 150));
+    setActiveTab("audit");
+    setAuditFilter("all");
+    showNotice("Simulation complete ajoutee au journal.");
+  }
+
+  function clearAuditTrail() {
+    setAuditTrail([]);
+    setActiveTab("audit");
+    setAuditFilter("all");
+    showNotice("Journal d'audit vide pour relancer la demo.");
+  }
+
+  const auditLabels = {
+    audit_exported: "Export audit",
+    alert_reviewed: "Alerte traitee",
+    campaign_uploaded: "Campagne importee",
+    config_updated: "Config modifiee",
+    dashboard_viewed: "Menu consulte",
+    dataset_exported: "Export dataset",
+    forbidden_access: "Acces refuse",
+    permission_added: "Permission ajoutee",
+    permission_removed: "Permission retiree",
+    role_assigned: "Attribution",
+    role_created: "Creation groupe",
+    role_deleted: "Suppression groupe",
+    role_updated: "Edition groupe",
+    session_login: "Connexion",
+    task_created: "Tache creee",
+    task_status_changed: "Statut tache",
+    token_revoked: "Token invalide",
+    user_reactivated: "Compte reactive",
+    user_suspended: "Compte suspendu",
+  };
+
+  return (
+    <div className="stack">
+      <div className="intro-actions access-actions">
+        <button className="ghost-button" onClick={simulateAuditTrail} type="button">
+          <Icons.Activity size={17} />
+          <span>Simuler audit complet</span>
+        </button>
+        <button
+          className="ghost-button"
+          disabled={!auditTrail.length}
+          onClick={clearAuditTrail}
+          type="button"
+        >
+          <Icons.ArrowClockwise size={17} />
+          <span>Vider audit</span>
+        </button>
+        <button className="ghost-button" onClick={exportAudit} type="button">
+          <Icons.ArrowLineDown size={17} />
+          <span>Exporter l'audit</span>
+        </button>
+      </div>
+
+      <Surface className="access-surface">
+        <div className="access-summary-grid" aria-label="Synthese des habilitations">
+          <div className="access-stat access-stat-main">
+            <span>RBAC local</span>
+            <strong>{roles.length} groupes</strong>
+            <small>{FULL_ACCESS_PERMISSIONS.length} droits menus et actions</small>
+          </div>
+          <div className="access-stat">
+            <span>Role actif</span>
+            <strong>{currentRole?.name || "Super Administrateur"}</strong>
+            <small>{currentRole?.permissions?.length || 0} permissions</small>
+          </div>
+          <div className="access-stat">
+            <span>Audit</span>
+            <strong>{formatNumber(auditStats.total)}</strong>
+            <small>{formatNumber(auditStats.today)} aujourd'hui</small>
+          </div>
+          <div className="access-stat">
+            <span>Points sensibles</span>
+            <strong>{formatNumber(auditStats.critical)}</strong>
+            <small>{formatNumber(auditStats.simulated)} simules</small>
+          </div>
+        </div>
+
+        <div className="toolbar access-toolbar">
+          <div className="segmented-control access-tabs">
+            <button
+              className={activeTab === "roles" ? "active" : ""}
+              onClick={() => setActiveTab("roles")}
+              type="button"
+            >
+              Groupes
+            </button>
+            <button
+              className={activeTab === "users" ? "active" : ""}
+              onClick={() => setActiveTab("users")}
+              type="button"
+            >
+              Attributions
+            </button>
+            <button
+              className={activeTab === "audit" ? "active" : ""}
+              onClick={() => setActiveTab("audit")}
+              type="button"
+            >
+              Audit
+            </button>
+          </div>
+          <span className="count-pill access-current-role">
+            {formatNumber(auditStats.actors)} acteur(s) traces
+          </span>
+        </div>
+
+        {!canManageAccess ? (
+          <InlineMessage>
+            Consultation seule: ton role ne possede pas la permission de gestion des habilitations.
+          </InlineMessage>
+        ) : null}
+        {notice ? <InlineMessage>{notice}</InlineMessage> : null}
+        {error ? <InlineMessage tone="error">{error}</InlineMessage> : null}
+
+        {activeTab === "roles" ? (
+          <div className="access-layout">
+            <form className="role-card access-create-card" onSubmit={createRole}>
+              <div className="role-header">
+                <Icons.ShieldCheck size={24} weight="duotone" />
+                <div>
+                  <p className="eyebrow">Nouveau groupe</p>
+                  <h3>Creation rapide</h3>
+                </div>
+              </div>
+              <label className="field">
+                <span>Nom du groupe</span>
+                <input
+                  disabled={!canManageAccess}
+                  onChange={(event) =>
+                    setRoleDraft((current) => ({ ...current, name: event.target.value }))
+                  }
+                  placeholder="Manager Qualite"
+                  value={roleDraft.name}
+                />
+              </label>
+              <label className="field">
+                <span>Description</span>
+                <textarea
+                  disabled={!canManageAccess}
+                  onChange={(event) =>
+                    setRoleDraft((current) => ({ ...current, description: event.target.value }))
+                  }
+                  placeholder="Perimetre et responsabilites du groupe"
+                  rows={3}
+                  value={roleDraft.description}
+                />
+              </label>
+              <button className="primary-button compact" disabled={!canManageAccess} type="submit">
+                <span>Creer le groupe</span>
+                <span className="button-icon">
+                  <Icons.CheckCircle size={16} weight="bold" />
+                </span>
+              </button>
+            </form>
+
+            {roles.map((role) => {
+              const assignedCount = countAssignedUsers(role.id);
+              const isEditing = editingRoleId === role.id;
+
+              return (
+                <article className="role-card" key={role.id}>
+                  <div className="role-header">
+                    <Icons.ShieldCheck size={24} weight="duotone" />
+                    <div className="role-title">
+                      {isEditing ? (
+                        <>
+                          <input
+                            className="role-title-input"
+                            onChange={(event) =>
+                              setEditDraft((current) => ({ ...current, name: event.target.value }))
+                            }
+                            value={editDraft.name}
+                          />
+                          <textarea
+                            onChange={(event) =>
+                              setEditDraft((current) => ({
+                                ...current,
+                                description: event.target.value,
+                              }))
+                            }
+                            rows={2}
+                            value={editDraft.description}
+                          />
+                        </>
+                      ) : (
+                        <>
+                          <h3>{role.name}</h3>
+                          <p>{role.description}</p>
+                        </>
+                      )}
+                    </div>
+                    <span className="count-pill">{assignedCount} user</span>
+                  </div>
+
+                  <div className="role-actions">
+                    {isEditing ? (
+                      <>
+                        <button className="small-action" onClick={() => saveRoleEdit(role)} type="button">
+                          Enregistrer
+                        </button>
+                        <button className="small-action" onClick={() => setEditingRoleId("")} type="button">
+                          Annuler
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <button
+                          className="small-action"
+                          disabled={!canManageAccess || role.locked}
+                          onClick={() => startRoleEdit(role)}
+                          type="button"
+                        >
+                          Editer
+                        </button>
+                        <button
+                          className="small-action danger-action"
+                          disabled={!canManageAccess || role.locked || assignedCount > 0}
+                          onClick={() => deleteRole(role)}
+                          type="button"
+                        >
+                          Supprimer
+                        </button>
+                      </>
+                    )}
+                  </div>
+
+                  <div className="permission-sections">
+                    {ACCESS_PERMISSION_GROUPS.map((group) => (
+                      <div className="permission-section" key={`${role.id}-${group.id}`}>
+                        <strong>{group.label}</strong>
+                        <div className="permission-grid">
+                          {group.permissions.map((permission) => {
+                            const checked = role.permissions.includes(permission.id);
+                            const disabled =
+                              !canManageAccess ||
+                              role.locked ||
+                              (role.id === currentRoleId &&
+                                checked &&
+                                (permission.id === "access" ||
+                                  permission.id === "action.manage_access"));
+
+                            return (
+                              <label
+                                className={`permission-toggle ${disabled ? "disabled" : ""}`}
+                                key={permission.id}
+                              >
+                                <input
+                                  checked={checked}
+                                  disabled={disabled}
+                                  onChange={() => togglePermission(role, permission.id)}
+                                  type="checkbox"
+                                />
+                                <span>
+                                  <strong>{permission.label}</strong>
+                                  <small>{permission.detail}</small>
+                                </span>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        ) : null}
+
+        {activeTab === "users" ? (
+          loadingUsers ? (
+            <SkeletonRows />
+          ) : apiUsers.length ? (
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Collaborateur</th>
+                    <th>Telephone</th>
+                    <th>Groupe attribue</th>
+                    <th>Permissions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {apiUsers.map((apiUser) => {
+                    const userKey = getUserKey(apiUser);
+                    const assignedRoleId = assignments[userKey] || "super_admin";
+                    const assignedRole = roles.find((role) => role.id === assignedRoleId) || roles[0];
+                    const isCurrentUser = userKey === currentUserKey;
+
+                    return (
+                      <tr key={userKey}>
+                        <td>
+                          <div className="identity-inline">
+                            <strong>{apiUser.name || "Sans nom"}</strong>
+                            <small>{apiUser.email || "Email non renseigne"}</small>
+                          </div>
+                          {isCurrentUser ? <span className="count-pill inline-pill">Moi</span> : null}
+                        </td>
+                        <td>{apiUser.telephone || "Non renseigne"}</td>
+                        <td>
+                          <select
+                            className="access-select"
+                            disabled={!canManageAccess || isCurrentUser}
+                            onChange={(event) => assignRoleToUser(apiUser, event.target.value)}
+                            value={assignedRoleId}
+                          >
+                            {roles.map((role) => (
+                              <option key={role.id} value={role.id}>
+                                {role.name}
+                              </option>
+                            ))}
+                          </select>
+                        </td>
+                        <td>{assignedRole?.permissions?.length || 0} droit(s)</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <EmptyState
+              body="Aucun collaborateur n'a ete retourne par l'API pour l'instant."
+              icon={Icons.UsersThree}
+              title="Aucune attribution"
+            />
+          )
+        ) : null}
+
+        {activeTab === "audit" ? (
+          <div className="audit-panel">
+            <div className="audit-controls">
+              <div className="segmented-control audit-filters" aria-label="Filtrer le journal">
+                {Object.entries(AUDIT_CATEGORY_LABELS).map(([categoryId, label]) => (
+                  <button
+                    className={auditFilter === categoryId ? "active" : ""}
+                    key={categoryId}
+                    onClick={() => setAuditFilter(categoryId)}
+                    type="button"
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <span className="count-pill">
+                {formatNumber(filteredAuditTrail.length)} affiche(s)
+              </span>
+            </div>
+
+            {filteredAuditTrail.length ? (
+              <div className="table-wrap audit-table">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Date</th>
+                      <th>Niveau</th>
+                      <th>Source</th>
+                      <th>Acteur</th>
+                      <th>Action</th>
+                      <th>Cible</th>
+                      <th>Details</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredAuditTrail.map((entry) => (
+                      <tr key={entry.id}>
+                        <td>{formatDate(entry.at)}</td>
+                        <td>
+                          <span className={`audit-severity ${entry.severity || "info"}`}>
+                            {AUDIT_SEVERITY_LABELS[entry.severity] || "Info"}
+                          </span>
+                        </td>
+                        <td>
+                          <span className="audit-source">
+                            {entry.source === "simulation" ? "Simulation" : "Front"}
+                          </span>
+                        </td>
+                        <td>{entry.actor}</td>
+                        <td>
+                          <span className="audit-action-stack">
+                            <span className="audit-action">
+                              {auditLabels[entry.action] || entry.action}
+                            </span>
+                            <small>{AUDIT_CATEGORY_LABELS[entry.category] || "RBAC"}</small>
+                          </span>
+                        </td>
+                        <td>{entry.target}</td>
+                        <td className="audit-detail">{entry.detail}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <EmptyState
+                body={
+                  auditTrail.length
+                    ? "Aucun evenement ne correspond au filtre actif."
+                    : "Lance la simulation pour generer sessions, permissions, exports, alertes, taches et erreurs API."
+                }
+                icon={Icons.ShieldCheck}
+                title={auditTrail.length ? "Filtre vide" : "Journal vide"}
+              />
+            )}
+          </div>
+        ) : null}
+      </Surface>
+    </div>
+  );
+}
+
+function ConfigPage({ canUpdateConfig = true }) {
   const [values, setValues] = useState(DEFAULT_CONFIG);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
@@ -1530,6 +2721,12 @@ function ConfigPage() {
 
   async function submitConfig(event) {
     event.preventDefault();
+
+    if (!canUpdateConfig) {
+      setError("Ton role ne permet pas de modifier la configuration.");
+      return;
+    }
+
     setSaving(true);
     setMessage("");
     setError("");
@@ -1553,10 +2750,17 @@ function ConfigPage() {
       <div className="config-grid">
         <Surface>
         <form className="config-form" onSubmit={submitConfig}>
+          {!canUpdateConfig ? (
+            <InlineMessage>
+              Mode lecture seule: les reglages systeme sont reserves aux roles autorises.
+            </InlineMessage>
+          ) : null}
+
           <label className="field range-field">
             <span>Seuil de consensus</span>
             <strong>{values.seuil_consensus}%</strong>
             <input
+              disabled={!canUpdateConfig}
               max="100"
               min="0"
               onChange={(event) =>
@@ -1570,6 +2774,7 @@ function ConfigPage() {
           <label className="field">
             <span>Frequence sentinelle</span>
             <input
+              disabled={!canUpdateConfig}
               min="0"
               onChange={(event) =>
                 setValues((current) => ({ ...current, freq_sentinelle: event.target.value }))
@@ -1583,7 +2788,7 @@ function ConfigPage() {
           {message ? <InlineMessage>{message}</InlineMessage> : null}
           {error ? <InlineMessage tone="error">{error}</InlineMessage> : null}
 
-          <button className="primary-button" disabled={saving} type="submit">
+          <button className="primary-button" disabled={saving || !canUpdateConfig} type="submit">
             <span>{saving ? "Sauvegarde..." : "Sauvegarder"}</span>
             <span className="button-icon">
               <Icons.CheckCircle size={17} weight="bold" />
